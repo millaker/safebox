@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ $# -eq 0 ]; then
+  echo "Usage: $0 <command> [args...]" >&2 
+  exit 1
+fi
+
+PROJECT_DIR="$(pwd -P)"
+
+SEATBELT_PROFILE=$(cat <<EOF
+(version 1)
+(allow default)
+
+; Block all file write/modify/delete syscalls system-wide
+(deny file-write*)
+
+; Allow writes in safe zone
+(allow file-write*
+  (subpath "${PROJECT_DIR}")
+  (subpath "/tmp")
+  (subpath "${HOME}/.codex")
+  (subpath "${HOME}/.gemini")
+  (subpath "${HOME}/.claude")
+  (regex #"^/dev/(null|zero|tty)$")
+)
+
+; Avoid reading credentials
+(deny file-read*
+  (subpath "${HOME}/.ssh")
+)
+
+; Avoid escalating privileges
+(deny process-exec (regex #"(/|^)(sudo|su|login|doas|pkexec)$"))
+EOF
+)
+
+exec sandbox-exec -p "$SEATBELT_PROFILE" -- "$@"
