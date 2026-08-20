@@ -8,7 +8,9 @@ fi
 
 PROJECT_DIR="$(pwd -P)"
 
-SEATBELT_PROFILE=$(cat <<EOF
+run_darwin() {
+  local seatbelt_profile
+  seatbelt_profile=$(cat <<EOF
 (version 1)
 (allow default)
 
@@ -35,4 +37,52 @@ SEATBELT_PROFILE=$(cat <<EOF
 EOF
 )
 
-exec sandbox-exec -p "$SEATBELT_PROFILE" -- "$@"
+  exec sandbox-exec -p "$seatbelt_profile" -- "$@"
+}
+
+run_linux() {
+  if ! command -v bwrap >/dev/null 2>&1; then
+    echo "Error: bubblewrap ('bwrap') is required on Linux but not found in PATH." >&2
+    exit 1
+  fi
+
+  local bwrap_args=(
+    --die-with-parent
+    --unshare-pid
+    --proc /proc
+    --dev /dev
+    --ro-bind / /
+    --bind /tmp /tmp
+    --bind "$PROJECT_DIR" "$PROJECT_DIR"
+    --chdir "$PROJECT_DIR"
+  )
+
+  # Allow writes in safe agent working dirs
+  for dir in "${HOME}/.codex" "${HOME}/.gemini" "${HOME}/.claude"; do
+    [ -d "$dir" ] || mkdir -p "$dir" 2>/dev/null || true
+    if [ -d "$dir" ]; then
+      bwrap_args+=(--bind "$dir" "$dir")
+    fi
+  done
+
+  # Avoid reading credentials
+  if [ -d "${HOME}/.ssh" ]; then
+    bwrap_args+=(--tmpfs "${HOME}/.ssh")
+  fi
+
+  exec bwrap "${bwrap_args[@]}" -- "$@"
+}
+
+OS="$(uname -s)"
+case "${OS}" in
+  Darwin)
+    run_darwin "$@"
+    ;;
+  Linux)
+    run_linux "$@"
+    ;;
+  *)
+    echo "Error: Unsupported operating system '${OS}'" >&2
+    exit 1
+    ;;
+esac
