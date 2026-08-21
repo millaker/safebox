@@ -1,14 +1,66 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ALLOWED_DIRS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -D)
+      if [ $# -lt 2 ]; then
+        echo "Error: -D requires a directory path" >&2
+        exit 1
+      fi
+      ALLOWED_DIRS+=("$2")
+      shift 2
+      ;;
+    -D*)
+      dir="${1#-D}"
+      dir="${dir#=}"
+      if [ -z "$dir" ]; then
+        echo "Error: -D requires a directory path" >&2
+        exit 1
+      fi
+      ALLOWED_DIRS+=("$dir")
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 if [ $# -eq 0 ]; then
-  echo "Usage: $0 <command> [args...]" >&2 
+  echo "Usage: $0 [-Ddir ...] <command> [args...]" >&2 
   exit 1
 fi
 
 PROJECT_DIR="$(pwd -P)"
 
+resolve_path() {
+  local target="$1"
+  target="${target/#\~/$HOME}"
+  if [ ! -d "$target" ]; then
+    echo "Error: Directory '$1' does not exist or is not a directory." >&2
+    exit 1
+  fi
+  (cd "$target" && pwd -P)
+}
+
+RESOLVED_ALLOWED_DIRS=()
+for dir in "${ALLOWED_DIRS[@]}"; do
+  RESOLVED_ALLOWED_DIRS+=("$(resolve_path "$dir")")
+done
+
 run_darwin() {
+  local extra_subpaths=""
+  for dir in "${RESOLVED_ALLOWED_DIRS[@]}"; do
+    extra_subpaths+=$'\n'"  (subpath \"${dir}\")"
+  done
+
   local seatbelt_profile
   seatbelt_profile=$(cat <<EOF
 (version 1)
@@ -25,6 +77,7 @@ run_darwin() {
   (subpath "${HOME}/.gemini")
   (subpath "${HOME}/.claude")
   (regex #"^/dev/(null|zero|tty)$")
+  ${extra_subpaths}
 )
 
 ; Avoid reading credentials
@@ -63,6 +116,11 @@ run_linux() {
     if [ -d "$dir" ]; then
       bwrap_args+=(--bind "$dir" "$dir")
     fi
+  done
+
+  # Allow writes in user-specified allowed dirs
+  for dir in "${RESOLVED_ALLOWED_DIRS[@]}"; do
+    bwrap_args+=(--bind "$dir" "$dir")
   done
 
   # Avoid reading credentials
